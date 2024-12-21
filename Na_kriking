@@ -1,0 +1,96 @@
+# Required Libraries
+import geopandas as gpd
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.ticker import MaxNLocator  # Import MaxNLocator
+from scipy.interpolate import griddata
+from shapely.geometry import Point
+
+# Loading data
+Point_path="/content/drive/MyDrive/holetta/Holeta_soil_lab.csv"
+boundary_path="/content/drive/MyDrive/holetta/Boundary/Holeta_without .shp"
+compound ="/content/drive/MyDrive/holetta/Compound Boundary/Bishoftu.shp"
+
+
+# Read the data
+soil_data = pd.read_csv(Point_path)
+boundary = gpd.read_file(boundary_path)
+compound = gpd.read_file(compound_path)
+
+# Create GeoDataFrame for the soil data
+geometry = [Point(xy) for xy in zip(soil_data['x'], soil_data['y'])]
+soil_gdf = gpd.GeoDataFrame(soil_data, geometry=geometry)
+
+# Extract the Na__meq_10 values and coordinates
+coordinates = soil_gdf[['x', 'y']].values
+Na_values = soil_gdf['Na__meq_10'].values  # Replace pH with Na
+
+# Create a grid for interpolation
+grid_x, grid_y = np.meshgrid(np.linspace(boundary.total_bounds[0], boundary.total_bounds[2], 100),
+                               np.linspace(boundary.total_bounds[1], boundary.total_bounds[3], 100))
+
+# Perform interpolation using griddata (linear interpolation)
+grid_z = griddata(coordinates, Na_values, (grid_x, grid_y), method='linear')
+
+# Create a DataFrame for the interpolated results
+interpolated_results = pd.DataFrame({'x': grid_x.flatten(), 'y': grid_y.flatten(), 'Na__meq_10': grid_z.flatten()})
+
+# Determine the range of Na values for classification
+min_Na = interpolated_results['Na__meq_10'].min()
+max_Na = interpolated_results['Na__meq_10'].max()
+
+# Define classification thresholds based on the extracted range
+def classify_Na(value):
+    range_Na = max_Na - min_Na
+    threshold = min_Na + (range_Na * 0.25)  # Set threshold at 25% of the range
+
+    if value < threshold:
+        return 'Very Low'
+    else:
+        return 'Low'
+
+# Apply classification to the interpolated results
+interpolated_results['Na_class'] = interpolated_results['Na__meq_10'].apply(classify_Na)
+
+# Create a GeoDataFrame for the interpolated results
+interpolated_gdf = gpd.GeoDataFrame(interpolated_results, geometry=gpd.points_from_xy(interpolated_results.x, interpolated_results.y))
+
+# Clip the results to the boundary
+clipped_results = gpd.clip(interpolated_gdf, boundary)
+
+# Define colors for the Na classes
+color_map = {
+    'Very Low': '#A8D8B9',  # Light Green
+    'Low': '#FF4500'        # Orange Red
+}
+
+# Plotting the results
+fig, ax = plt.subplots(figsize=(14, 10))
+boundary.boundary.plot(ax=ax, color='black')
+
+# Plot the clipped results with specified colors
+for Na_class, color in color_map.items():
+    subset = clipped_results[clipped_results['Na_class'] == Na_class]
+    if not subset.empty:  # Check if subset is not empty
+        subset.plot(ax=ax, color=color, label=Na_class, alpha=0.5)
+
+# Plot compound boundary and label it
+compound.boundary.plot(ax=ax, color='red')
+compound_label = compound.geometry.unary_union.centroid  # Get the centroid for labeling
+ax.text(compound_label.x, compound_label.y, 'Compound', fontsize=12, color='black', ha='center')
+
+# Add vertical legend next to the map
+plt.legend(title='Exch. Na (Cmolc kg⁻¹ soil)', loc='lower right', fontsize=10, bbox_to_anchor=(1, 0), title_fontsize='12', frameon=True, ncol=1)
+
+# Set titles and labels
+#plt.title('Kriging Interpolation of Na Values')  # Title for clarity
+plt.xlabel('Easting')  # Changed to Longitude for clarity
+plt.ylabel('Northing')  # Changed to Latitude for clarity
+
+# Limit the number of ticks on the y-axis to 5
+ax.yaxis.set_major_locator(MaxNLocator(nbins=5))
+ax.xaxis.set_major_locator(MaxNLocator(nbins=4))
+
+plt.tight_layout()  # Adjust layout to make room for the legend
+plt.show()
